@@ -4,9 +4,36 @@ import { useFilesystem, base64FromPath } from '@ionic/react-hooks/filesystem';
 import { useStorage } from '@ionic/react-hooks/storage';
 import { isPlatform } from '@ionic/react';
 import { CameraResultType, CameraSource, CameraPhoto, Capacitor, FilesystemDirectory } from '@capacitor/core';
+import {Photo} from '../type/usePhotoGallery';
 
+const PHOTO_STORAGE = "photos";
 export function usePhotoGallery() {
     const {getPhoto} = useCamera();
+    const [photos, setPhotos] = useState<Photo[]>([]);
+    const {deleteFile, getUri, readFile, writeFile} = useFilesystem();
+    const {get, set} = useStorage();
+
+    useEffect(() => {
+        const loadSaved = async() => {
+            const photosString = await get('photos');
+            //const photos = (photosString ? JSON.parse(photosString) : []) as Photo[];
+            const photosInStorage = (photosString ? JSON.parse(photosString) : []) as Photo[];
+            
+            // if running on the web...
+            if(!isPlatform('hybrid')) {
+                for(let photo of photosInStorage) {
+                    const file = await readFile({
+                        path: photo.filepath,
+                        directory: FilesystemDirectory.Data
+                    });
+                    // Web platform only: Load photo as base64 data
+                    photo.webviewPath = `data:image/jpeg;base64,${file.data}`;
+                }
+            }
+            setPhotos(photosInStorage);
+        };
+        loadSaved();
+    }, [get, readFile]);
 
     const takePhoto = async() => {
         const cameraPhoto = await getPhoto({
@@ -14,9 +41,69 @@ export function usePhotoGallery() {
             source: CameraSource.Camera,
             quality: 100
         });
+        const fileName = new Date().getTime() + '.jpeg';
+        const savedFileImage = await savePicture(cameraPhoto, fileName);
+        const newPhotos = [{
+            filepath: fileName,
+            webviewPath: cameraPhoto.webPath
+        }, ...photos];
+        setPhotos(newPhotos);
+        set(PHOTO_STORAGE, JSON.stringify(newPhotos));
+    };
+
+    const savePicture = async(photo: CameraPhoto, fileName: string): Promise<Photo> => {
+        /*const base64Data = await base64FromPath(photo.webPath!);
+        const savedFile = await writeFile({
+            path: fileName,
+            data: base64Data,
+            directory: FilesystemDirectory.Data
+        });*/
+
+        let base64Data: string;
+        // "hybrid" will detect Cordova or Capacitor;
+        if(isPlatform('hybrid')) {
+            const file = await readFile({
+                path: photo.path!
+            });
+            base64Data = file.data;
+        } else {
+            base64Data = await base64FromPath(photo.webPath!);
+        }
+        const savedFile = await writeFile({
+            path: fileName,
+            data: base64Data,
+            directory: FilesystemDirectory.Data
+        });
+        if(isPlatform('hybrid')) {
+            // Display the new image by rewriting the 'file://' path to HTTP
+            // Details: https://ionicframewrok.com/docs/building/webview#file-protocol
+            return {
+                filepath: savedFile.uri,
+                webviewPath: Capacitor.convertFileSrc(savedFile.uri)
+            };
+        } else {
+            // Use webPath to display the new image instead of base64 since it's
+            // already loaded into memory
+            return {
+                filepath: fileName,
+                webviewPath: photo.webPath
+            }
+        }
+
+
+        // return {
+        //     filepath: fileName,
+        //     webviewPath: photo.webPath
+        // }
+    };
+
+    const deletePhoto = () => {
+
     };
 
     return {
-        takePhoto
+        photos,
+        takePhoto,
+        deletePhoto
     };
 }
